@@ -1,0 +1,13 @@
+{
+  "active_passcode": "123456",
+  "user_session": null,
+  "journey": {
+    "current_q": 1,
+    "completed": false,
+    "answers": {}
+  },
+  "admin_inbox": [],
+  "memories": [],
+  "reminders": [],
+  "journal": []
+}

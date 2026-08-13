@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
+from .routers.auth import router as auth_router
+from .routers.journey import router as journey_router
 
 
 class WelcomeResponse(BaseModel):
@@ -25,11 +28,14 @@ class HealthResponse(BaseModel):
 
 
 app = FastAPI(
-    title="DearShri-AI",
+    title="DearShri AI",
     summary="The DearShri-AI API",
     description="A FastAPI foundation for building DearShri-AI services.",
     version="0.1.0",
 )
+
+app.include_router(auth_router)
+app.include_router(journey_router)
 
 
 @app.get("/", response_model=WelcomeResponse, tags=["service"])
