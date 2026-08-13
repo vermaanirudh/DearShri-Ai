@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "DearShri Ai"
+description = "A warm frosted-glass companion web app for moving through a reflective journey, chatting with an AI companion, revisiting memories, and finding gentle help."
+version = "1.0.0"
+id = "artifacts/dearshri-ai-ui"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22714
+
+[services.development]
+run = "pnpm --filter @workspace/dearshri-ai-ui run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dearshri-ai-ui", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/dearshri-ai-ui/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22714"
+BASE_PATH = "/"
