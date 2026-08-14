@@ -21,6 +21,13 @@ The API is available at:
 - `GET /journey/status` — read progress using `X-Session-Token`
 - `POST /journey/answer` — submit the next sequential answer
 - `GET /journey/admin-inbox` — read forwarded answers using `X-Admin-Secret`
+- `POST /api/chat/message` — send a user-scoped message with `X-User-ID`
+- `GET /api/chat/history` — read only that user's chat history
+- `DELETE /api/chat/history` — clear only that user's history
+- `PATCH /api/chat/preferences` — update only that user's preferences
+- `GET /api/notices/for-user` — read notices not dismissed by that user
+- `POST /api/notices` — broadcast an admin notice
+- `POST /api/notices/{notice_id}/dismiss` — dismiss a notice for one user
 - `/docs` — interactive OpenAPI documentation
 
 Journey answer requests use this shape:

@@ -9,5 +9,7 @@
   "admin_inbox": [],
   "memories": [],
   "reminders": [],
-  "journal": []
+  "journal": [],
+  "users": {},
+  "notices": []
 }

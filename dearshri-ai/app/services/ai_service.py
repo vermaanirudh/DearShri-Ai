@@ -19,6 +19,15 @@ EMPATHETIC_SYSTEM_PROMPT = (
     "follow-up thought. Keep the response concise and human."
 )
 
+COMMAND_PREFIXES = (
+    "/",
+    "command:",
+    "settings ",
+    "set theme ",
+    "clear chat",
+    "show notices",
+)
+
 
 def build_empathetic_prompt(question_number: int, answer: str) -> str:
     """Build the prompt used for an empathetic AI insight."""
@@ -29,6 +38,71 @@ def build_empathetic_prompt(question_number: int, answer: str) -> str:
         f"Person's answer:\n{answer.strip()}\n\n"
         "Write a short empathetic insight in the first person plural or "
         "second person, without inventing facts."
+    )
+
+
+def classify_message(message: str) -> str:
+    """Classify input before responding so commands are not treated as chat."""
+
+    normalized = message.strip().lower()
+    if normalized.startswith(COMMAND_PREFIXES):
+        return "command"
+    return "conversation"
+
+
+def execute_command(command: str, preferences: dict[str, Any]) -> dict[str, Any]:
+    """Execute only supported deterministic commands."""
+
+    normalized = command.strip().lower()
+    if normalized in {"/clear", "/clear chat", "clear chat"}:
+        return {
+            "command": "clear_chat",
+            "message": "Your chat history is ready to be cleared.",
+            "action": "clear_chat",
+        }
+    if normalized in {"/notices", "show notices"}:
+        return {
+            "command": "show_notices",
+            "message": "I’ll bring your latest notices into view.",
+            "action": "show_notices",
+        }
+    if normalized.startswith("set theme "):
+        theme = normalized.removeprefix("set theme ").strip()
+        if theme not in {"light", "dark", "system"}:
+            return {
+                "command": "set_theme",
+                "message": "Theme must be light, dark, or system.",
+                "action": "none",
+            }
+        preferences["theme"] = theme
+        return {
+            "command": "set_theme",
+            "message": f"Theme set to {theme}.",
+            "action": "set_theme",
+            "theme": theme,
+        }
+    return {
+        "command": "unsupported",
+        "message": "I can help with clear chat, show notices, or set theme.",
+        "action": "none",
+    }
+
+
+def generate_chat_response(message: str, history: list[dict[str, Any]]) -> str:
+    """Return a concise, grounded response for casual conversation."""
+
+    normalized = message.lower()
+    if "who are you" in normalized:
+        return "I’m DearShri AI, a focused companion for clear, grounded conversations."
+    if "thank" in normalized:
+        return "You’re welcome. I’m here whenever you want to continue."
+    if "help" in normalized:
+        return "I can help you think through a question, make a plan, or take one clear next step."
+    if len(history) > 20:
+        return "There is a lot in this conversation. I’m keeping the thread focused on what you just shared."
+    return (
+        "I hear you. I’ll stay with what you shared and keep the next step clear. "
+        "What part feels most important right now?"
     )
 
 

@@ -28,6 +28,8 @@ def _initial_data() -> dict[str, Any]:
         "memories": [],
         "reminders": [],
         "journal": [],
+        "users": {},
+        "notices": [],
     }
 
 
@@ -47,6 +49,48 @@ def _merge_with_defaults(data: dict[str, Any]) -> dict[str, Any]:
             journey.setdefault(key, deepcopy(default_value))
 
     return data
+
+
+def get_user_data(db: dict[str, Any], user_id: str) -> dict[str, Any]:
+    """Return isolated persistent data for a Clerk user ID."""
+
+    users = db.setdefault("users", {})
+    if not isinstance(users, dict):
+        db["users"] = {}
+        users = db["users"]
+
+    user_data = users.setdefault(
+        user_id,
+        {
+            "chat_history": [],
+            "preferences": {
+                "theme": "system",
+                "notifications": True,
+            },
+            "memories": [],
+            "reminders": [],
+        },
+    )
+    if not isinstance(user_data, dict):
+        users[user_id] = {
+            "chat_history": [],
+            "preferences": {
+                "theme": "system",
+                "notifications": True,
+            },
+            "memories": [],
+            "reminders": [],
+        }
+        user_data = users[user_id]
+
+    user_data.setdefault("chat_history", [])
+    user_data.setdefault(
+        "preferences",
+        {"theme": "system", "notifications": True},
+    )
+    user_data.setdefault("memories", [])
+    user_data.setdefault("reminders", [])
+    return user_data
 
 
 def get_db() -> dict[str, Any]:
