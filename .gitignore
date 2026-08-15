@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Runtime database
+dearshri-ai/data/*.sqlite3
+dearshri-ai/data/*.sqlite3-*

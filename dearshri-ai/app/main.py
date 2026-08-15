@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from .routers.auth import router as auth_router
+from .routers.admin import router as admin_router
 from .routers.chat import router as chat_router
 from .routers.journey import router as journey_router
 from .routers.notices import router as notices_router
@@ -38,6 +39,7 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(journey_router)
+app.include_router(admin_router)
 app.include_router(chat_router, prefix="/api")
 app.include_router(notices_router, prefix="/api")
 
