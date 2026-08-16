@@ -17,6 +17,7 @@ from .config import (
     DATABASE_FILE,
     SPECIAL_USER_ACCESS_CODE,
 )
+from .journey_data import JOURNEY_STORIES, flattened_questions
 
 
 _DB_LOCK = RLock()
@@ -61,6 +62,17 @@ CREATE TABLE IF NOT EXISTS journey_sets (
     status TEXT NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'published', 'archived')),
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS journey_stories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    journey_set_id INTEGER NOT NULL REFERENCES journey_sets(id) ON DELETE CASCADE,
+    story_id TEXT NOT NULL,
+    story_num INTEGER NOT NULL,
+    emoji TEXT NOT NULL,
+    title TEXT NOT NULL,
+    UNIQUE (journey_set_id, story_id),
+    UNIQUE (journey_set_id, story_num)
 );
 
 CREATE TABLE IF NOT EXISTS journey_questions (
@@ -117,7 +129,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     mode TEXT NOT NULL DEFAULT 'companion',
-    sender TEXT NOT NULL CHECK (sender IN ('user', 'assistant')),
+    sender TEXT NOT NULL,
     text TEXT NOT NULL,
     timestamp TEXT NOT NULL
 );
@@ -128,7 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_user
 CREATE TABLE IF NOT EXISTS user_preferences (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     theme TEXT NOT NULL DEFAULT 'system',
-    notifications INTEGER NOT NULL DEFAULT 1
+    notifications INTEGER NOT NULL DEFAULT 1,
+    chat_paused INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS system_notices (
@@ -172,11 +185,31 @@ def _connect() -> sqlite3.Connection:
 
 
 def _seed_journey(connection: sqlite3.Connection) -> None:
+    expected_questions = flattened_questions()
     existing = connection.execute(
         "SELECT id FROM journey_sets WHERE version = 1",
     ).fetchone()
     if existing:
-        return
+        question_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM journey_questions WHERE journey_set_id = ?",
+            (existing["id"],),
+        ).fetchone()["count"]
+        story_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM journey_stories WHERE journey_set_id = ?",
+            (existing["id"],),
+        ).fetchone()["count"]
+        if question_count == len(expected_questions) and story_count == len(JOURNEY_STORIES):
+            return
+        response_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM journey_responses WHERE journey_set_id = ?",
+            (existing["id"],),
+        ).fetchone()["count"]
+        # The previous starter seed was 250 generic questions. It is safe to
+        # replace only when no user has answered that legacy set.
+        if response_count == 0:
+            connection.execute("DELETE FROM journey_sets WHERE id = ?", (existing["id"],))
+        else:
+            return
 
     created_at = now_iso()
     cursor = connection.execute(
@@ -189,6 +222,23 @@ def _seed_journey(connection: sqlite3.Connection) -> None:
     set_id = cursor.lastrowid
     connection.executemany(
         """
+        INSERT INTO journey_stories
+            (journey_set_id, story_id, story_num, emoji, title)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                set_id,
+                story["story_id"],
+                story["story_num"],
+                story["emoji"],
+                story["title"],
+            )
+            for story in JOURNEY_STORIES
+        ],
+    )
+    connection.executemany(
+        """
         INSERT INTO journey_questions
             (journey_set_id, story_id, question_num, prompt_text)
         VALUES (?, ?, ?, ?)
@@ -196,14 +246,11 @@ def _seed_journey(connection: sqlite3.Connection) -> None:
         [
             (
                 set_id,
-                f"story-{((question_number - 1) // 10) + 1}",
-                question_number,
-                (
-                    f"Question {question_number}: What feels most present "
-                    "for you right now?"
-                ),
+                question["story_id"],
+                question["question_num"],
+                question["prompt_text"],
             )
-            for question_number in range(1, 251)
+            for question in expected_questions
         ],
     )
 
@@ -263,9 +310,53 @@ def _seed_users(connection: sqlite3.Connection) -> None:
 def initialize_database() -> None:
     with _DB_LOCK, closing(_connect()) as connection:
         connection.executescript(SCHEMA)
+        _migrate_existing_schema(connection)
         _seed_users(connection)
         _seed_journey(connection)
         connection.commit()
+
+
+def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
+    """Upgrade tables created by the first JSON-to-SQLite migration."""
+
+    preference_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(user_preferences)").fetchall()
+    }
+    if "chat_paused" not in preference_columns:
+        connection.execute(
+            "ALTER TABLE user_preferences ADD COLUMN chat_paused INTEGER NOT NULL DEFAULT 0",
+        )
+
+    chat_schema = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_messages'",
+    ).fetchone()
+    if chat_schema and "CHECK (sender IN" in (chat_schema["sql"] or ""):
+        connection.execute("DROP INDEX IF EXISTS idx_chat_messages_user")
+        connection.execute("ALTER TABLE chat_messages RENAME TO chat_messages_legacy")
+        connection.execute(
+            """
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                mode TEXT NOT NULL DEFAULT 'companion',
+                sender TEXT NOT NULL,
+                text TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+            """,
+        )
+        connection.execute(
+            """
+            INSERT INTO chat_messages (id, user_id, mode, sender, text, timestamp)
+            SELECT id, user_id, mode, sender, text, timestamp
+            FROM chat_messages_legacy
+            """,
+        )
+        connection.execute("DROP TABLE chat_messages_legacy")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, timestamp)",
+        )
 
 
 @contextmanager

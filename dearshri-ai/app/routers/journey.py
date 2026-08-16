@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -10,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..services.ai_service import generate_ai_insight
+from ..services.journey_analysis import analyze_completed_journey
 from ..sqlite_database import db_connection
 from .auth import get_current_session, require_admin_session
 
@@ -26,11 +26,26 @@ class JourneyStatusResponse(BaseModel):
     total_questions: int
     journey_set_id: int | None = None
     journey_set_version: int | None = None
+    chat_paused: bool = False
+    stories: list[dict[str, Any]] = []
+
+
+class JourneyStoryProgress(BaseModel):
+    story_id: str
+    story_num: int
+    emoji: str
+    title: str
+    answered_count: int
+    total_questions: int
+    unlocked: bool
+    completed: bool
 
 
 class AnswerSubmission(BaseModel):
     question_number: int = Field(ge=1)
     answer: str = Field(min_length=1, max_length=10_000)
+    story_id: str | None = Field(default=None, max_length=120)
+    question_id: int | None = Field(default=None, ge=1)
 
 
 class AnswerSubmissionResponse(BaseModel):
@@ -41,6 +56,7 @@ class AnswerSubmissionResponse(BaseModel):
     memories_added: list[str]
     journey_completed: bool
     journey_locked: bool
+    traits_analyzed: list[dict[str, Any]] = []
 
 
 class AdminInboxResponse(BaseModel):
@@ -56,6 +72,39 @@ def _published_set(connection: Any) -> Any:
         LIMIT 1
         """,
     ).fetchone()
+
+
+def _story_progress(connection: Any, user_id: int, journey_set_id: int) -> list[dict[str, Any]]:
+    stories = connection.execute(
+        """
+        SELECT js.story_id, js.story_num, js.emoji, js.title,
+               COUNT(jq.id) AS total_questions,
+               COUNT(r.id) AS answered_count
+        FROM journey_stories js
+        JOIN journey_questions jq
+          ON jq.journey_set_id = js.journey_set_id
+         AND jq.story_id = js.story_id
+        LEFT JOIN journey_responses r
+          ON r.question_id = jq.id AND r.user_id = ?
+        WHERE js.journey_set_id = ?
+        GROUP BY js.id
+        ORDER BY js.story_num ASC
+        """,
+        (user_id, journey_set_id),
+    ).fetchall()
+    progress: list[dict[str, Any]] = []
+    previous_completed = True
+    for story in stories:
+        completed = story["answered_count"] >= story["total_questions"]
+        progress.append(
+            {
+                **dict(story),
+                "unlocked": previous_completed,
+                "completed": completed,
+            },
+        )
+        previous_completed = completed
+    return progress
 
 
 @router.get("/status", response_model=JourneyStatusResponse)
@@ -85,6 +134,10 @@ def journey_status(
             (session["user_id"], journey_set["id"]),
         ).fetchone()["count"]
         completed = answered >= total
+        preferences = connection.execute(
+            "SELECT chat_paused FROM user_preferences WHERE user_id = ?",
+            (session["user_id"],),
+        ).fetchone()
         return JourneyStatusResponse(
             visible=not completed,
             locked=completed,
@@ -94,7 +147,27 @@ def journey_status(
             total_questions=total,
             journey_set_id=journey_set["id"],
             journey_set_version=journey_set["version"],
+            chat_paused=bool(preferences["chat_paused"]) if preferences else False,
+            stories=_story_progress(connection, int(session["user_id"]), journey_set["id"]),
         )
+
+
+@router.post("/start")
+def start_journey(
+    session: Annotated[dict[str, Any], Depends(get_current_session)],
+) -> dict[str, Any]:
+    """Pause standard AI chat while the user is actively completing Journey."""
+
+    with db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO user_preferences (user_id, theme, notifications, chat_paused)
+            VALUES (?, 'system', 1, 1)
+            ON CONFLICT(user_id) DO UPDATE SET chat_paused = 1
+            """,
+            (session["user_id"],),
+        )
+    return {"started": True, "chat_paused": True}
 
 
 @router.post("/answer", response_model=AnswerSubmissionResponse)
@@ -137,6 +210,10 @@ def submit_answer(
         ).fetchone()
         if not question:
             raise HTTPException(status_code=404, detail="Journey question not found.")
+        if submission.story_id and submission.story_id != question["story_id"]:
+            raise HTTPException(status_code=409, detail="Journey story does not match the question.")
+        if submission.question_id and submission.question_id != question["id"]:
+            raise HTTPException(status_code=409, detail="Journey question ID does not match.")
 
         existing_traits = [
             dict(row)
@@ -166,6 +243,14 @@ def submit_answer(
                 timestamp,
             ),
         )
+        connection.execute(
+            """
+            INSERT INTO user_preferences (user_id, theme, notifications, chat_paused)
+            VALUES (?, 'system', 1, 1)
+            ON CONFLICT(user_id) DO UPDATE SET chat_paused = 1
+            """,
+            (session["user_id"],),
+        )
         memories_added: list[str] = []
         for memory in insight["memories"]:
             connection.execute(
@@ -186,6 +271,18 @@ def submit_answer(
             memories_added.append(memory)
 
         completed = submission.question_number >= total
+        traits_analyzed: list[dict[str, Any]] = []
+        if completed:
+            traits_analyzed = analyze_completed_journey(
+                connection,
+                int(session["user_id"]),
+                int(journey_set["id"]),
+                int(journey_set["version"]),
+            )
+            connection.execute(
+                "UPDATE user_preferences SET chat_paused = 0 WHERE user_id = ?",
+                (session["user_id"],),
+            )
         return AnswerSubmissionResponse(
             saved=True,
             question_number=submission.question_number,
@@ -194,6 +291,7 @@ def submit_answer(
             memories_added=memories_added,
             journey_completed=completed,
             journey_locked=completed,
+            traits_analyzed=traits_analyzed,
         )
 
 

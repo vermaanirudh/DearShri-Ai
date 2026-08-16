@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..services.ai_service import (
@@ -27,7 +27,7 @@ class MessageRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     user_message: dict[str, Any]
-    assistant_message: dict[str, Any]
+    assistant_message: dict[str, Any] | None
     kind: str
     command: dict[str, Any] | None = None
 
@@ -62,6 +62,7 @@ def _preferences(connection: Any, user_id: int) -> dict[str, Any]:
     return {
         "theme": row["theme"],
         "notifications": bool(row["notifications"]),
+        "chat_paused": bool(row["chat_paused"]),
     }
 
 
@@ -74,6 +75,13 @@ def send_message(
 
     with db_connection() as connection:
         preferences = _preferences(connection, int(session["user_id"]))
+        if request.mode not in {"friend", "tutor", "guardian", "admin"}:
+            raise HTTPException(status_code=422, detail="Unknown companion mode.")
+        if preferences["chat_paused"] and request.mode != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail="Standard AI chat is paused while you complete Journey.",
+            )
         previous_rows = connection.execute(
             """
             SELECT sender, text, timestamp FROM chat_messages
@@ -91,21 +99,24 @@ def send_message(
             """,
             (session["user_id"], request.mode, request.content.strip(), timestamp),
         )
-        kind = classify_message(request.content)
+        kind = "admin_message" if request.mode == "admin" else classify_message(request.content)
         command_result: dict[str, Any] | None = None
-        if kind == "command":
+        if request.mode == "admin":
+            response_text = None
+        elif kind == "command":
             command_result = execute_command(request.content, preferences)
             response_text = command_result["message"]
         else:
-            response_text = generate_chat_response(request.content, history)
-        assistant_timestamp = datetime.now(UTC).isoformat()
-        connection.execute(
-            """
-            INSERT INTO chat_messages (user_id, mode, sender, text, timestamp)
-            VALUES (?, ?, 'assistant', ?, ?)
-            """,
-            (session["user_id"], request.mode, response_text, assistant_timestamp),
-        )
+            response_text = generate_chat_response(request.content, history, request.mode)
+        assistant_timestamp = datetime.now(UTC).isoformat() if response_text else None
+        if response_text:
+            connection.execute(
+                """
+                INSERT INTO chat_messages (user_id, mode, sender, text, timestamp)
+                VALUES (?, ?, 'assistant', ?, ?)
+                """,
+                (session["user_id"], request.mode, response_text, assistant_timestamp),
+            )
         connection.execute(
             """
             UPDATE user_preferences
@@ -128,7 +139,7 @@ def send_message(
                 "role": "assistant",
                 "content": response_text,
                 "created_at": assistant_timestamp,
-            },
+            } if response_text else None,
             kind=kind,
             command=command_result,
         )

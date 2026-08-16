@@ -28,6 +28,25 @@ COMMAND_PREFIXES = (
     "show notices",
 )
 
+COMPANION_MODES = {
+    "friend": {
+        "label": "Friend",
+        "description": "Gentle, supportive, empathetic, and cooperative.",
+    },
+    "tutor": {
+        "label": "Tutor",
+        "description": "Strategy-focused, clear, and firm about study plans.",
+    },
+    "guardian": {
+        "label": "Guardian",
+        "description": "Protective, practical, and firm about safety and wellbeing.",
+    },
+    "admin": {
+        "label": "Admin",
+        "description": "A direct user-to-admin channel; AI generation is disabled.",
+    },
+}
+
 
 def build_empathetic_prompt(question_number: int, answer: str) -> str:
     """Build the prompt used for an empathetic AI insight."""
@@ -88,7 +107,11 @@ def execute_command(command: str, preferences: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def generate_chat_response(message: str, history: list[dict[str, Any]]) -> str:
+def generate_chat_response(
+    message: str,
+    history: list[dict[str, Any]],
+    mode: str = "friend",
+) -> str:
     """Return a concise, grounded response for casual conversation."""
 
     normalized = message.lower()
@@ -100,6 +123,10 @@ def generate_chat_response(message: str, history: list[dict[str, Any]]) -> str:
         return "I can help you think through a question, make a plan, or take one clear next step."
     if len(history) > 20:
         return "There is a lot in this conversation. I’m keeping the thread focused on what you just shared."
+    if mode == "tutor":
+        return "Let’s make this practical: choose one clear task, give it a short time block, and start there."
+    if mode == "guardian":
+        return "Let’s keep this grounded and safe. Focus on the next practical step and reach out to a trusted person if you need support."
     return (
         "I hear you. I’ll stay with what you shared and keep the next step clear. "
         "What part feels most important right now?"

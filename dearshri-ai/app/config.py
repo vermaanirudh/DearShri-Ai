@@ -13,4 +13,4 @@ ADMIN_SECRET = "admin_access_key_2026"
 DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "app_data.json"
 DATABASE_FILE = Path(__file__).resolve().parent.parent / "data" / "dearshri.sqlite3"
 APP_TIMEZONE = "Asia/Kolkata"
-TOTAL_JOURNEY_QUESTIONS = 250
+TOTAL_JOURNEY_QUESTIONS = 100

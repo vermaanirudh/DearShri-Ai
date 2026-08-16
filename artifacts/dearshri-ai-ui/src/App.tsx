@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowUp,
   Bell,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -9,9 +10,11 @@ import {
   Clock3,
   HelpCircle,
   History,
+  Heart,
   KeyRound,
   Leaf,
   LockKeyhole,
+  GraduationCap,
   LogOut,
   Menu,
   MessageSquare,
@@ -22,15 +25,18 @@ import {
   Send,
   Settings2,
   Shield,
+  ShieldCheck,
   Sparkles,
   Trash2,
   UserRound,
   X,
 } from 'lucide-react';
+import { journeyStories } from './journey-data';
 
 type Screen = 'login' | 'intro' | 'app';
-type View = 'chat' | 'history' | 'settings' | 'admin';
+type View = 'chat' | 'companion' | 'journey' | 'history' | 'settings' | 'admin';
 type Role = 'user' | 'assistant';
+type CompanionMode = 'friend' | 'tutor' | 'guardian' | 'admin';
 
 type ChatMessage = {
   id: string;
@@ -55,6 +61,13 @@ const suggestions = [
   { title: 'Something is on my mind', copy: 'Start wherever the feeling begins.' },
 ];
 
+const modeDetails: Record<CompanionMode, { label: string; icon: typeof Heart; description: string }> = {
+  friend: { label: 'Friend', icon: Heart, description: 'Warm and supportive' },
+  tutor: { label: 'Tutor', icon: GraduationCap, description: 'Clear and practical' },
+  guardian: { label: 'Guardian', icon: ShieldCheck, description: 'Grounded and protective' },
+  admin: { label: 'Admin', icon: Shield, description: 'Direct human channel' },
+};
+
 function Logo({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`ds-logo ${compact ? 'compact' : ''}`} aria-label="DearShri Ai">
@@ -69,7 +82,7 @@ function Logo({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
+function LoginScreen({ onLogin, externalError }: { onLogin: (phone: string, code: string) => Promise<void>; externalError?: string }) {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
@@ -85,7 +98,7 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
       return;
     }
     setError('');
-    onLogin(phone);
+    void onLogin(phone, code);
   };
 
   return (
@@ -132,7 +145,7 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
               />
             </div>
           </label>
-          {error && <div className="ds-form-error" role="alert">{error}</div>}
+          {(error || externalError) && <div className="ds-form-error" role="alert">{error || externalError}</div>}
           <button className="ds-primary-button" type="submit" data-testid="button-login">
             Continue <ArrowUp size={16} />
           </button>
@@ -178,6 +191,8 @@ function Sidebar({
   view,
   collapsed,
   mobileOpen,
+  journeyAvailable,
+  isAdmin,
   onView,
   onNewChat,
   onClose,
@@ -185,15 +200,19 @@ function Sidebar({
   view: View;
   collapsed: boolean;
   mobileOpen: boolean;
+  journeyAvailable: boolean;
+  isAdmin: boolean;
   onView: (view: View) => void;
   onNewChat: () => void;
   onClose: () => void;
 }) {
   const links: { id: View; label: string; icon: typeof MessageSquare }[] = [
     { id: 'chat', label: 'New chat', icon: MessageSquare },
+    ...(journeyAvailable ? [{ id: 'journey' as View, label: 'Journey', icon: BookOpen }] : []),
+    { id: 'companion', label: 'Companion', icon: Sparkles },
     { id: 'history', label: 'History', icon: History },
     { id: 'settings', label: 'Settings', icon: Settings2 },
-    { id: 'admin', label: 'Admin inbox', icon: Shield },
+    ...(isAdmin ? [{ id: 'admin' as View, label: 'Admin inbox', icon: Shield }] : []),
   ];
   return (
     <>
@@ -242,10 +261,14 @@ function ChatView({
   messages,
   onSend,
   onClear,
+  mode,
+  onModeChange,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
   onClear: () => void;
+  mode: CompanionMode;
+  onModeChange: (mode: CompanionMode) => void;
 }) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -266,9 +289,17 @@ function ChatView({
       <div className="ds-chat-titlebar">
         <div className="ds-chat-identity">
           <div className="ds-orb"><Sparkles size={17} /></div>
-          <div><strong>DearShri Ai</strong><span><i /> Ready when you are</span></div>
+          <div><strong>{modeDetails[mode].label} · DearShri Ai</strong><span><i /> {modeDetails[mode].description}</span></div>
         </div>
-        <button className="ds-icon-button" type="button" onClick={onClear} title="Clear conversation" aria-label="Clear conversation"><Trash2 size={16} /></button>
+        <div className="ds-chat-actions">
+          <div className="ds-mode-switcher" aria-label="Companion mode">
+            {(Object.keys(modeDetails) as CompanionMode[]).map((key) => {
+              const Icon = modeDetails[key].icon;
+              return <button key={key} type="button" className={mode === key ? 'active' : ''} onClick={() => onModeChange(key)} title={modeDetails[key].description}><Icon size={13} /><span>{modeDetails[key].label}</span></button>;
+            })}
+          </div>
+          <button className="ds-icon-button" type="button" onClick={onClear} title="Clear conversation" aria-label="Clear conversation"><Trash2 size={16} /></button>
+        </div>
       </div>
       <div className="ds-chat-scroll" ref={scrollRef} aria-live="polite">
         <div className="ds-chat-inner">
@@ -312,6 +343,58 @@ function ChatView({
           <button className="ds-send-button" type="button" onClick={send} disabled={!draft.trim()} aria-label="Send message" data-testid="button-send-message"><ArrowUp size={17} /></button>
         </div>
         <div className="ds-composer-meta"><span><LockKeyhole size={11} /> Private conversation</span><span>Enter to send · Shift + Enter for a new line</span></div>
+      </div>
+    </section>
+  );
+}
+
+function JourneyView({
+  answers,
+  onAnswer,
+}: {
+  answers: Record<string, string>;
+  onAnswer: (storyIndex: number, questionIndex: number, answer: string) => void;
+}) {
+  const [selectedStory, setSelectedStory] = useState(0);
+  const story = journeyStories[selectedStory];
+  const completedForStory = story.questions.filter((_, index) => answers[`${story.storyId}-${index}`]).length;
+  const previousComplete = selectedStory === 0 || journeyStories[selectedStory - 1].questions.every((_, index) => answers[`${journeyStories[selectedStory - 1].storyId}-${index}`]);
+  const unlocked = selectedStory === 0 || previousComplete;
+  const questionIndex = story.questions.findIndex((_, index) => !answers[`${story.storyId}-${index}`]);
+  const activeQuestion = questionIndex === -1 ? story.questions.length - 1 : questionIndex;
+  const [draft, setDraft] = useState(answers[`${story.storyId}-${activeQuestion}`] ?? '');
+  useEffect(() => {
+    setDraft(answers[`${story.storyId}-${activeQuestion}`] ?? '');
+  }, [selectedStory, answers, activeQuestion, story.storyId]);
+  const completedTotal = Object.keys(answers).length;
+
+  const submit = () => {
+    if (!draft.trim() || !unlocked || completedForStory >= 10) return;
+    onAnswer(selectedStory, activeQuestion, draft.trim());
+    setDraft('');
+  };
+
+  return (
+    <section className="ds-journey-view">
+      <div className="ds-page-heading">
+        <div><div className="ds-eyebrow">Your private reflection path</div><h1>The Journey</h1><p>Ten stories. One gentle question at a time. Your answers save automatically.</p></div>
+        <div className="ds-journey-total"><strong>{completedTotal}<span>/100</span></strong><small>questions explored</small></div>
+      </div>
+      <div className="ds-story-grid">
+        {journeyStories.map((item, index) => {
+          const count = item.questions.filter((_, question) => answers[`${item.storyId}-${question}`]).length;
+          const isUnlocked = index === 0 || journeyStories[index - 1].questions.every((_, question) => answers[`${journeyStories[index - 1].storyId}-${question}`]);
+          return <button key={item.storyId} type="button" className={`ds-story-card ${selectedStory === index ? 'selected' : ''} ${!isUnlocked ? 'locked' : ''}`} onClick={() => isUnlocked && setSelectedStory(index)} disabled={!isUnlocked}>
+            <div className="ds-story-top"><span className="ds-story-emoji">{item.emoji}</span>{isUnlocked ? <ChevronRight size={15} /> : <LockKeyhole size={14} />}</div>
+            <strong>Story {item.storyNum}</strong><h3>{item.title}</h3>
+            <div className="ds-story-progress"><i style={{ width: `${count * 10}%` }} /></div><small>{count === 10 ? 'Complete' : `${count}/10 explored`}</small>
+          </button>;
+        })}
+      </div>
+      <div className={`ds-journey-question ${!unlocked ? 'is-locked' : ''}`}>
+        <div className="ds-journey-question-top"><span>{story.emoji} Story {story.storyNum} · Question {activeQuestion + 1} of 10</span>{completedForStory === 10 && <span className="ds-complete-pill"><Check size={12} /> Complete</span>}</div>
+        <h2>{completedForStory === 10 ? 'This story is complete.' : story.questions[activeQuestion]}</h2>
+        {unlocked && completedForStory < 10 ? <><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Take your time. There is no perfect answer." rows={4} aria-label="Journey answer" /><button className="ds-primary-button small" type="button" onClick={submit} disabled={!draft.trim()}><Check size={14} /> Save & continue</button></> : <p>{completedForStory === 10 ? 'Choose another story, or keep this reflection close.' : 'Complete the previous story to gently unlock this one.'}</p>}
       </div>
     </section>
   );
@@ -366,7 +449,25 @@ function AdminView({ onNotice }: { onNotice: (message: string) => void }) {
   );
 }
 
-function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+async function apiRequest(path: string, options: RequestInit = {}, sessionToken?: string) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
+      ...(options.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail ?? `Request failed (${response.status})`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+function AppWorkspace({ onSignOut, phone, sessionToken, isAdmin }: { onSignOut: () => void; phone: string; sessionToken: string; isAdmin: boolean }) {
   const [view, setView] = useState<View>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -374,6 +475,29 @@ function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
   const [notifications, setNotifications] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>(defaultMessages);
   const [toast, setToast] = useState('');
+  const [mode, setMode] = useState<CompanionMode>('friend');
+  const journeyKey = `dearshri-journey-${phone.replace(/\D/g, '')}`;
+  const [journeyAnswers, setJourneyAnswers] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(sessionStorage.getItem(journeyKey) ?? '{}') as Record<string, string>; } catch { return {}; }
+  });
+  const [journeyComplete, setJourneyComplete] = useState(() => Object.keys(journeyAnswers).length >= 100);
+
+  useEffect(() => {
+    apiRequest('/api/chat/history', {}, sessionToken)
+      .then((data) => {
+        const loaded = (data.messages ?? []).map((message: { id: number; role: Role; content: string; created_at: string }) => ({
+          id: String(message.id), role: message.role, content: message.content,
+          time: new Intl.DateTimeFormat('en-IN', { hour: 'numeric', minute: '2-digit' }).format(new Date(message.created_at)),
+        }));
+        if (loaded.length) setMessages(loaded);
+      })
+      .catch(() => undefined);
+    apiRequest('/journey/status', {}, sessionToken)
+      .then((data) => {
+        if (data.completed) setJourneyComplete(true);
+      })
+      .catch(() => undefined);
+  }, [sessionToken]);
 
   useEffect(() => {
     if (!toast) return;
@@ -383,17 +507,19 @@ function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
 
   const time = useMemo(() => new Intl.DateTimeFormat('en-IN', { hour: 'numeric', minute: '2-digit' }).format(new Date()), []);
 
-  const sendMessage = (content: string) => {
+  const sendMessage = async (content: string) => {
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content, time };
     setMessages((current) => [...current, userMessage]);
-    window.setTimeout(() => {
-      setMessages((current) => [...current, {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: 'I hear you. We can take this one step at a time. What feels most important about it right now?',
-        time: 'Now',
-      }]);
-    }, 500);
+    try {
+      const data = await apiRequest('/api/chat/message', { method: 'POST', body: JSON.stringify({ content, mode }) }, sessionToken);
+      if (data.assistant_message) {
+        setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: 'assistant', content: data.assistant_message.content, time: 'Now' }]);
+      } else {
+        setMessages((current) => [...current, { id: `admin-${Date.now()}`, role: 'assistant', content: 'Your message is in the Admin channel. AI replies are disabled here; a human can respond from the inbox.', time: 'Sent' }]);
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Unable to send this message.');
+    }
   };
 
   const newChat = () => {
@@ -405,17 +531,43 @@ function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
   const clearChat = () => {
     setMessages(defaultMessages);
     setToast('Conversation cleared.');
+    apiRequest('/api/chat/history', { method: 'DELETE' }, sessionToken).catch(() => undefined);
+  };
+
+  const answerJourney = async (storyIndex: number, questionIndex: number, answer: string) => {
+    const key = `${journeyStories[storyIndex].storyId}-${questionIndex}`;
+    const next = { ...journeyAnswers, [key]: answer };
+    setJourneyAnswers(next);
+    sessionStorage.setItem(journeyKey, JSON.stringify(next));
+    try {
+      await apiRequest('/journey/start', { method: 'POST' }, sessionToken);
+      const result = await apiRequest('/journey/answer', {
+        method: 'POST',
+        body: JSON.stringify({
+          question_number: storyIndex * 10 + questionIndex + 1,
+          story_id: journeyStories[storyIndex].storyId,
+          answer,
+        }),
+      }, sessionToken);
+      if (result.journey_completed) {
+        setJourneyComplete(true);
+        setView('chat');
+        setToast('Your Journey is complete. Your reflection has been thoughtfully saved.');
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Your answer could not be saved.');
+    }
   };
 
   return (
     <div className="ds-workspace">
-      <Sidebar view={view} collapsed={sidebarCollapsed} mobileOpen={mobileOpen} onView={setView} onNewChat={newChat} onClose={() => setMobileOpen(false)} />
+      <Sidebar view={view} collapsed={sidebarCollapsed} mobileOpen={mobileOpen} journeyAvailable={!journeyComplete} isAdmin={isAdmin} onView={setView} onNewChat={newChat} onClose={() => setMobileOpen(false)} />
       <main className="ds-workspace-main">
         <header className="ds-workspace-header">
           <div className="ds-header-left">
             <button className="ds-icon-button ds-menu-button" type="button" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={19} /></button>
             <button className="ds-icon-button ds-collapse-button" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label="Toggle sidebar"><PanelLeft size={17} /></button>
-            <span className="ds-header-title">{view === 'chat' ? 'New conversation' : view === 'admin' ? 'Admin inbox' : view[0].toUpperCase() + view.slice(1)}</span>
+            <span className="ds-header-title">{view === 'chat' ? 'New conversation' : view === 'companion' ? 'Companion' : view === 'admin' ? 'Admin inbox' : view[0].toUpperCase() + view.slice(1)}</span>
           </div>
           <div className="ds-profile-wrap">
             <button className="ds-profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-label="Open profile menu"><span>S</span><ChevronDown size={13} /></button>
@@ -423,10 +575,11 @@ function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
           </div>
         </header>
         <div className="ds-workspace-content">
-          {view === 'chat' && <ChatView messages={messages} onSend={sendMessage} onClear={clearChat} />}
+          {(view === 'chat' || view === 'companion') && <ChatView messages={messages} onSend={sendMessage} onClear={clearChat} mode={mode} onModeChange={setMode} />}
+          {view === 'journey' && !journeyComplete && <JourneyView answers={journeyAnswers} onAnswer={answerJourney} />}
           {view === 'history' && <HistoryView onOpenChat={() => setView('chat')} />}
           {view === 'settings' && <SettingsView notifications={notifications} onNotifications={() => setNotifications((value) => !value)} />}
-          {view === 'admin' && <AdminView onNotice={setToast} />}
+          {view === 'admin' && isAdmin && <AdminView onNotice={setToast} />}
         </div>
       </main>
       {toast && <div className="ds-toast" role="status">{toast}</div>}
@@ -437,25 +590,41 @@ function AppWorkspace({ onSignOut }: { onSignOut: () => void }) {
 function App() {
   const [screen, setScreen] = useState<Screen>(() => sessionStorage.getItem('dearshri-screen') === 'app' ? 'app' : 'login');
   const [phone, setPhone] = useState(() => sessionStorage.getItem('dearshri-phone') ?? '');
+  const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem('dearshri-session') ?? '');
+  const [isAdmin, setIsAdmin] = useState(() => sessionStorage.getItem('dearshri-role') === 'admin');
+  const [loginError, setLoginError] = useState('');
 
-  const login = (value: string) => {
-    setPhone(value);
-    setScreen('intro');
-    sessionStorage.setItem('dearshri-phone', value);
-    sessionStorage.setItem('dearshri-screen', 'intro');
+  const login = async (value: string, code: string) => {
+    setLoginError('');
+    try {
+      const data = await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ mobile_number: value, passcode: code }) });
+      setPhone(data.profile.phone_number);
+      setSessionToken(data.session_token);
+      setIsAdmin(data.role === 'admin');
+      sessionStorage.setItem('dearshri-phone', data.profile.phone_number);
+      sessionStorage.setItem('dearshri-session', data.session_token);
+      sessionStorage.setItem('dearshri-role', data.role);
+      setScreen('intro');
+      sessionStorage.setItem('dearshri-screen', 'intro');
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : 'Unable to sign in.');
+    }
   };
   const start = () => {
     setScreen('app');
     sessionStorage.setItem('dearshri-screen', 'app');
   };
   const signOut = () => {
+    if (sessionToken) apiRequest('/auth/logout', { method: 'POST' }, sessionToken).catch(() => undefined);
     sessionStorage.clear();
+    setSessionToken('');
+    setIsAdmin(false);
     setScreen('login');
   };
 
-  if (screen === 'login') return <LoginScreen onLogin={login} />;
+  if (screen === 'login') return <LoginScreen onLogin={login} externalError={loginError} />;
   if (screen === 'intro') return <IntroScreen name={phone ? 'Shri' : 'there'} onStart={start} />;
-  return <AppWorkspace onSignOut={signOut} />;
+  return <AppWorkspace onSignOut={signOut} phone={phone} sessionToken={sessionToken} isAdmin={isAdmin} />;
 }
 
 export default App;

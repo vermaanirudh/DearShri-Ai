@@ -35,6 +35,10 @@ class JourneySetPublishResponse(BaseModel):
     title: str
 
 
+class AdminReplyRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20_000)
+
+
 @router.get("/dashboard")
 def dashboard(
     _session: Annotated[dict[str, Any], Depends(require_admin_session)],
@@ -120,6 +124,58 @@ def journey_sets(
         return [dict(row) for row in rows]
 
 
+@router.get("/chat-messages")
+def chat_messages(
+    _session: Annotated[dict[str, Any], Depends(require_admin_session)],
+) -> list[dict[str, Any]]:
+    """Read direct user-to-admin messages without exposing standard AI context."""
+
+    with db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT m.id, m.user_id, u.phone_number, m.sender, m.text,
+                   m.timestamp
+            FROM chat_messages m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.mode = 'admin'
+            ORDER BY m.timestamp ASC, m.id ASC
+            """,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@router.post("/chat-messages/{user_id}/reply")
+def reply_to_user(
+    user_id: int,
+    request: AdminReplyRequest,
+    _session: Annotated[dict[str, Any], Depends(require_admin_session)],
+) -> dict[str, Any]:
+    """Send an admin-authored reply; no AI generation is involved."""
+
+    with db_connection() as connection:
+        user = connection.execute(
+            "SELECT id, phone_number FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        timestamp = datetime.now(UTC).isoformat()
+        cursor = connection.execute(
+            """
+            INSERT INTO chat_messages (user_id, mode, sender, text, timestamp)
+            VALUES (?, 'admin', 'admin', ?, ?)
+            """,
+            (user_id, request.text.strip(), timestamp),
+        )
+        return {
+            "sent": True,
+            "message_id": cursor.lastrowid,
+            "user_id": user_id,
+            "phone_number": user["phone_number"],
+            "timestamp": timestamp,
+        }
+
+
 @router.post("/journey-sets/draft")
 def draft_journey_set(
     request: JourneySetDraftRequest,
@@ -190,8 +246,24 @@ def publish_journey_set(
             "SELECT COUNT(*) AS count FROM journey_questions WHERE journey_set_id = ?",
             (journey_set_id,),
         ).fetchone()["count"]
-        if question_count == 0:
-            raise HTTPException(status_code=409, detail="Cannot publish an empty journey.")
+        story_count = connection.execute(
+            "SELECT COUNT(DISTINCT story_id) AS count FROM journey_questions WHERE journey_set_id = ?",
+            (journey_set_id,),
+        ).fetchone()["count"]
+        story_sizes = connection.execute(
+            """
+            SELECT story_id, COUNT(*) AS count
+            FROM journey_questions
+            WHERE journey_set_id = ?
+            GROUP BY story_id
+            """,
+            (journey_set_id,),
+        ).fetchall()
+        if question_count != 100 or story_count != 10 or any(row["count"] != 10 for row in story_sizes):
+            raise HTTPException(
+                status_code=409,
+                detail="A published Journey must contain 10 stories with 10 questions each.",
+            )
         connection.execute(
             """
             UPDATE journey_sets
